@@ -13,9 +13,14 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Зберігання інформації про користувачів
 const clients = new Map();
 const bannedUsers = new Set();
+const adminUsers = new Set();
+
+// Пароль для отримання прав адміністратора
+const ADMIN_PASSWORD = 'admin123'; // В реальному проекті зберігайте це безпечно
 
 wss.on('connection', (ws) => {
     let userId = null;
+    let isAdmin = false;
     
     ws.on('message', (message) => {
         const data = JSON.parse(message);
@@ -34,20 +39,25 @@ wss.on('connection', (ws) => {
                 
                 // Реєстрація користувача
                 userId = data.username;
+                isAdmin = adminUsers.has(userId);
+                
                 clients.set(userId, {
                     ws: ws,
-                    username: data.username
+                    username: data.username,
+                    isAdmin: isAdmin
                 });
                 
                 // Повідомлення про успішний вхід
                 ws.send(JSON.stringify({
                     type: 'login',
-                    success: true
+                    success: true,
+                    isAdmin: isAdmin
                 }));
+                
                 // Повідомлення всім про нового користувача
                 broadcastMessage({
                     type: 'notification',
-                    message: `${userId} приєднався до чату`,
+                    message: `${userId} ${isAdmin ? '(Адміністратор)' : ''} приєднався до чату`,
                     timestamp: new Date().toISOString()
                 });
                 
@@ -72,6 +82,7 @@ wss.on('connection', (ws) => {
                 const messageData = {
                     type: 'message',
                     username: userId,
+                    isAdmin: isAdmin,
                     text: data.text,
                     sentTimestamp: data.timestamp,
                     receivedTimestamp: new Date().toISOString()
@@ -80,11 +91,66 @@ wss.on('connection', (ws) => {
                 broadcastMessage(messageData);
                 break;
                 
+            case 'verifyAdmin':
+                // Перевірка пароля адміністратора
+                if (data.password === ADMIN_PASSWORD) {
+                    isAdmin = true;
+                    adminUsers.add(userId);
+                    
+                    // Оновлення інформації про клієнта
+                    if (clients.has(userId)) {
+                        const clientInfo = clients.get(userId);
+                        clientInfo.isAdmin = true;
+                        clients.set(userId, clientInfo);
+                    }
+                    
+                    // Повідомлення про успішне отримання прав адміністратора
+                    ws.send(JSON.stringify({
+                        type: 'adminVerified',
+                        success: true
+                    }));
+                    
+                    // Сповіщення всіх про нового адміністратора
+                    broadcastMessage({
+                        type: 'notification',
+                        message: `${userId} отримав права адміністратора`,
+                        timestamp: new Date().toISOString()
+                    });
+                    
+                    // Оновлення списку користувачів
+                    sendUserList();
+                } else {
+                    ws.send(JSON.stringify({
+                        type: 'adminVerified',
+                        success: false,
+                        message: 'Невірний пароль адміністратора'
+                    }));
+                }
+                break;
+                
             case 'ban':
                 // Перевірка, чи авторизований користувач
                 if (!userId) return;
                 
+                // Перевірка прав адміністратора
+                if (!isAdmin) {
+                    ws.send(JSON.stringify({
+                        type: 'error',
+                        message: 'У вас немає прав адміністратора для блокування користувачів'
+                    }));
+                    return;
+                }
+                
                 const userToBan = data.username;
+                
+                // Неможливо заблокувати адміністратора
+                if (adminUsers.has(userToBan)) {
+                    ws.send(JSON.stringify({
+                        type: 'error',
+                        message: 'Неможливо заблокувати адміністратора'
+                    }));
+                    return;
+                }
                 
                 // Додавання користувача до списку заблокованих
                 bannedUsers.add(userToBan);
@@ -94,7 +160,7 @@ wss.on('connection', (ws) => {
                     const clientWs = clients.get(userToBan).ws;
                     clientWs.send(JSON.stringify({
                         type: 'banned',
-                        message: `Вас заблоковано користувачем ${userId}`
+                        message: `Вас заблоковано адміністратором ${userId}`
                     }));
                     
                     // Видалення користувача зі списку клієнтів
@@ -105,7 +171,7 @@ wss.on('connection', (ws) => {
                 // Повідомлення про блокування
                 broadcastMessage({
                     type: 'notification',
-                    message: `Користувача ${userToBan} заблоковано`,
+                    message: `Користувача ${userToBan} заблоковано адміністратором ${userId}`,
                     timestamp: new Date().toISOString()
                 });
                 
@@ -123,7 +189,7 @@ wss.on('connection', (ws) => {
             // Повідомлення про вихід користувача
             broadcastMessage({
                 type: 'notification',
-                message: `${userId} покинув чат`,
+                message: `${userId} ${isAdmin ? '(Адміністратор)' : ''} покинув чат`,
                 timestamp: new Date().toISOString()
             });
             
@@ -141,10 +207,16 @@ wss.on('connection', (ws) => {
     
     // Функція для відправки списку користувачів
     function sendUserList() {
-        const users = Array.from(clients.keys());
+        const usersList = Array.from(clients.entries()).map(([username, info]) => {
+            return {
+                username: username,
+                isAdmin: info.isAdmin
+            };
+        });
+        
         const userListMessage = {
             type: 'userList',
-            users: users
+            users: usersList
         };
         
         clients.forEach((client) => {

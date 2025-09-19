@@ -21,6 +21,9 @@
                 <div class="user-list-container">
                     <h3>Користувачі</h3>
                     <ul id="user-list"></ul>
+                    <div class="admin-panel">
+                        <button id="admin-login-button">Стати адміністратором</button>
+                    </div>
                 </div>
                 
                 <div class="messages-container">
@@ -31,6 +34,18 @@
                         <button id="send-button">Надіслати</button>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Модальне вікно для входу адміністратора -->
+    <div id="admin-modal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3>Вхід адміністратора</h3>
+            <div class="form-group">
+                <input type="password" id="admin-password" placeholder="Введіть пароль адміністратора">
+                <button id="admin-verify-button">Підтвердити</button>
             </div>
         </div>
     </div>

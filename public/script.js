@@ -1,6 +1,7 @@
 // Глобальні змінні
 let ws;
 let username;
+let isAdmin = false;
 let contextMenu;
 
 // DOM елементи
@@ -12,6 +13,11 @@ const userList = document.getElementById('user-list');
 const messagesContainer = document.getElementById('messages');
 const messageInput = document.getElementById('message-input');
 const sendButton = document.getElementById('send-button');
+const adminLoginButton = document.getElementById('admin-login-button');
+const adminModal = document.getElementById('admin-modal');
+const adminPassword = document.getElementById('admin-password');
+const adminVerifyButton = document.getElementById('admin-verify-button');
+const closeModalBtn = document.querySelector('.close');
 
 // Ініціалізація
 function init() {
@@ -23,6 +29,18 @@ function init() {
     sendButton.addEventListener('click', sendMessage);
     messageInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') sendMessage();
+    });
+    
+    // Адміністративні функції
+    adminLoginButton.addEventListener('click', showAdminModal);
+    adminVerifyButton.addEventListener('click', verifyAdmin);
+    closeModalBtn.addEventListener('click', hideAdminModal);
+    
+    // Закриття модального вікна при кліку поза ним
+    window.addEventListener('click', (e) => {
+        if (e.target === adminModal) {
+            hideAdminModal();
+        }
     });
     
     // Початковий фокус на поле введення імені
@@ -47,6 +65,34 @@ function createContextMenu() {
     document.addEventListener('click', () => {
         contextMenu.style.display = 'none';
     });
+}
+
+// Показати модальне вікно адміністратора
+function showAdminModal() {
+    adminModal.style.display = 'block';
+    adminPassword.focus();
+}
+
+// Сховати модальне вікно адміністратора
+function hideAdminModal() {
+    adminModal.style.display = 'none';
+    adminPassword.value = '';
+}
+
+// Перевірка пароля адміністратора
+function verifyAdmin() {
+    const password = adminPassword.value.trim();
+    
+    if (password && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+            type: 'verifyAdmin',
+            password: password
+        }));
+        
+        hideAdminModal();
+    } else {
+        alert('Будь ласка, введіть пароль адміністратора');
+    }
 }
 
 // Підключення до WebSocket сервера
@@ -91,7 +137,9 @@ function handleMessage(data) {
     switch (data.type) {
         case 'login':
             if (data.success) {
+                isAdmin = data.isAdmin;
                 showChatScreen();
+                updateAdminUI();
             }
             break;
             
@@ -107,6 +155,15 @@ function handleMessage(data) {
             updateUserList(data.users);
             break;
             
+        case 'adminVerified':
+            if (data.success) {
+                isAdmin = true;
+                updateAdminUI();
+            } else {
+                alert(data.message || 'Помилка верифікації адміністратора');
+            }
+            break;
+            
         case 'banned':
             alert(data.message);
             showLoginScreen();
@@ -115,10 +172,17 @@ function handleMessage(data) {
         case 'error':
             alert(data.message);
             break;
-            
-        case 'serverLink':
-            displayServerLink(data.url, data.message);
-            break;
+    }
+}
+
+// Оновлення UI для адміністратора
+function updateAdminUI() {
+    if (isAdmin) {
+        adminLoginButton.textContent = 'Ви адміністратор';
+        adminLoginButton.disabled = true;
+    } else {
+        adminLoginButton.textContent = 'Стати адміністратором';
+        adminLoginButton.disabled = false;
     }
 }
 
@@ -145,6 +209,7 @@ function showLoginScreen() {
     chatScreen.classList.remove('active');
     loginScreen.classList.add('active');
     usernameInput.focus();
+    isAdmin = false;
 }
 
 // Відправка повідомлення
@@ -165,7 +230,7 @@ function sendMessage() {
 // Відображення повідомлення в чаті
 function displayMessage(data) {
     const messageElement = document.createElement('div');
-    messageElement.className = 'message';
+    messageElement.className = data.isAdmin ? 'message admin-message' : 'message';
     
     // Форматування часових міток
     const sentTime = new Date(data.sentTimestamp).toLocaleTimeString();
@@ -173,7 +238,7 @@ function displayMessage(data) {
     
     messageElement.innerHTML = `
         <div class="header">
-            <span class="username">${data.username}</span>
+            <span class="username">${data.username}${data.isAdmin ? '<span class="admin-tag">[Адмін]</span>' : ''}</span>
             <span class="timestamp">Відправлено: ${sentTime} | Отримано: ${receivedTime}</span>
         </div>
         <div class="text">${data.text}</div>
@@ -203,15 +268,22 @@ function updateUserList(users) {
     
     users.forEach(user => {
         const listItem = document.createElement('li');
-        listItem.textContent = user;
-        listItem.dataset.username = user;
+        listItem.innerHTML = `
+            <span>${user.username}</span>
+            ${user.isAdmin ? '<span class="admin-badge">Адмін</span>' : ''}
+        `;
+        listItem.dataset.username = user.username;
+        listItem.dataset.isAdmin = user.isAdmin;
         
         // Додавання контекстного меню при правому кліку
         listItem.addEventListener('contextmenu', (e) => {
             e.preventDefault();
             
-            // Не показувати контекстне меню для власного імені
-            if (user === username) return;
+            // Не показувати контекстне меню для власного імені або якщо користувач не адмін
+            if (user.username === username || !isAdmin) return;
+            
+            // Не показувати опцію блокування для адміністраторів
+            if (user.isAdmin) return;
             
             // Позиціонування контекстного меню
             contextMenu.style.display = 'block';
@@ -221,7 +293,7 @@ function updateUserList(users) {
             // Додавання обробника для блокування користувача
             const banButton = document.getElementById('ban-user');
             banButton.onclick = () => {
-                banUser(user);
+                banUser(user.username);
                 contextMenu.style.display = 'none';
             };
         });
@@ -232,11 +304,13 @@ function updateUserList(users) {
 
 // Блокування користувача
 function banUser(userToBan) {
-    if (ws.readyState === WebSocket.OPEN) {
+    if (ws.readyState === WebSocket.OPEN && isAdmin) {
         ws.send(JSON.stringify({
             type: 'ban',
             username: userToBan
         }));
+    } else if (!isAdmin) {
+        alert('У вас немає прав адміністратора для блокування користувачів');
     }
 }
 
